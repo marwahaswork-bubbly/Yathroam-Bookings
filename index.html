@@ -413,8 +413,9 @@
     <form id="booking-form" onsubmit="saveBooking(event)">
       <input type="hidden" id="b-id">
       <div class="form-row" style="border:1px dashed var(--line);border-radius:8px;padding:12px;text-align:center;">
-        <button type="button" class="btn btn-sm" onclick="triggerScreenshotUpload()">📷 Scan Airbnb / Booking.com screenshot</button>
-        <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving.</div>
+        <button type="button" class="btn btn-sm" onclick="triggerScreenshotUpload()">📷 Scan Airbnb / Booking.com screenshot(s)</button>
+        <button type="button" class="btn btn-sm" id="scan-skip-btn" onclick="skipToNextScreenshot()" style="display:none;">Skip to next screenshot →</button>
+        <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they'll be scanned one at a time, one booking per screenshot.</div>
       </div>
       <div class="form-row">
         <label>Property</label>
@@ -544,7 +545,7 @@
 </div>
 
 <input type="file" id="ics-file-input" accept=".ics,text/calendar" style="display:none;" onchange="handleIcsFileUpload(event)">
-<input type="file" id="screenshot-file-input" accept="image/*" style="display:none;" onchange="handleScreenshotUpload(event)">
+<input type="file" id="screenshot-file-input" accept="image/*" multiple style="display:none;" onchange="handleScreenshotUpload(event)">
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1489,9 +1490,16 @@ async function commitBookingSave(data){
   }
   await storageSet('bookings', bookings);
   syncBookingToSheet(data);
-  closeModal('booking-overlay');
   renderAll();
-  showToast('Booking saved');
+  if(screenshotQueue.length>0){
+    const next = screenshotQueue.shift();
+    openBookingModal();
+    showToast(`Booking saved — scanning next screenshot${screenshotQueue.length>0 ? ` (${screenshotQueue.length} left after this one)` : ''}`);
+    await processScreenshotFile(next);
+  } else {
+    closeModal('booking-overlay');
+    showToast('Booking saved');
+  }
 }
 
 let pendingBookingData = null;
@@ -1730,11 +1738,19 @@ function handleIcsFileUpload(e){
 }
 
 /* ---------------- Booking screenshot OCR import ---------------- */
-const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving.';
+const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they\'ll be scanned one at a time, one booking per screenshot.';
+
+let screenshotQueue = [];
 
 function resetScanStatus(){
   const el = document.getElementById('scan-status');
   if(el) el.textContent = SCAN_DEFAULT_MSG;
+  updateScanSkipButton();
+}
+
+function updateScanSkipButton(){
+  const btn = document.getElementById('scan-skip-btn');
+  if(btn) btn.style.display = screenshotQueue.length>0 ? '' : 'none';
 }
 
 function quickScanNewBooking(){
@@ -1751,28 +1767,42 @@ function triggerScreenshotUpload(){
   document.getElementById('screenshot-file-input').click();
 }
 
+function skipToNextScreenshot(){
+  if(screenshotQueue.length===0){ showToast('No more queued screenshots'); return; }
+  const next = screenshotQueue.shift();
+  openBookingModal();
+  processScreenshotFile(next);
+}
+
 async function handleScreenshotUpload(e){
-  const file = e.target.files[0];
+  const files = Array.from(e.target.files || []);
   e.target.value='';
-  if(!file) return;
+  if(files.length===0) return;
+  screenshotQueue = files.slice(1);
+  await processScreenshotFile(files[0]);
+}
+
+async function processScreenshotFile(file){
   const statusEl = document.getElementById('scan-status');
+  updateScanSkipButton();
+  const queueNote = screenshotQueue.length>0 ? ` (${screenshotQueue.length} more queued after this one)` : '';
   if(typeof Tesseract === 'undefined'){
-    statusEl.textContent = 'OCR library failed to load — check your internet connection and try again.';
+    statusEl.textContent = 'OCR library failed to load — check your internet connection and try again.' + queueNote;
     showToast('OCR unavailable right now');
     return;
   }
-  statusEl.textContent = 'Reading screenshot… this can take a few seconds.';
+  statusEl.textContent = `Reading screenshot…${queueNote} this can take a few seconds.`;
   try{
     const { data:{ text } } = await Tesseract.recognize(file, 'eng');
     const parsed = parseBookingScreenshot(text);
     applyParsedBooking(parsed);
-    statusEl.textContent = parsed.matched
+    statusEl.textContent = (parsed.matched
       ? `Detected ${parsed.platform || 'booking'} details from the screenshot — double-check dates and guest name, then save.`
-      : `Couldn't confidently read that screenshot — please fill in the details manually.`;
+      : `Couldn't confidently read that screenshot — please fill in the details manually.`) + queueNote;
     showToast(parsed.matched ? 'Screenshot scanned — review before saving' : 'Screenshot scanned, but little was recognized');
   }catch(err){
     console.error(err);
-    statusEl.textContent = 'Could not read this image — try a clearer/cropped screenshot or enter details manually.';
+    statusEl.textContent = 'Could not read this image — try a clearer/cropped screenshot or enter details manually.' + queueNote;
     showToast('Scan failed');
   }
 }
@@ -2040,7 +2070,13 @@ async function importEvents(events, propertyId, platform){
   return events.length;
 }
 
-function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+function closeModal(id){
+  document.getElementById(id).classList.remove('open');
+  if(id==='booking-overlay' && screenshotQueue.length>0){
+    screenshotQueue = [];
+    showToast('Remaining queued screenshots discarded');
+  }
+}
 
 let toastTimer;
 function showToast(msg){
