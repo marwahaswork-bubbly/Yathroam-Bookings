@@ -254,7 +254,7 @@
         <span>Properties</span><span class="nav-count" id="nav-count-properties">0</span>
       </button>
     </div>
-    <div class="sidebar-foot">Data is stored privately in this app, only on this device/account.</div>
+    <div class="sidebar-foot">Data is stored privately on this device — connect Google Sheets sync (Properties view) to access it from other devices too.</div>
   </div>
 
   <div class="main">
@@ -396,9 +396,9 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button type="button" class="btn btn-sm" onclick="saveSheetConfig()">Save settings</button>
           <button type="button" class="btn btn-sm btn-primary" onclick="connectGoogleSheet()">Connect Google account</button>
-          <button type="button" class="btn btn-sm" onclick="syncAllBookingsToSheet()">Sync all bookings now</button>
+          <button type="button" class="btn btn-sm" onclick="twoWaySync()">Sync with sheet now</button>
         </div>
-        <p style="font-size:11px;color:var(--ink-soft);margin:0;">Requires a Google Cloud OAuth Client ID with the Sheets API enabled, and this page served over http/https (not opened as a double-clicked file). Once connected, every booking you save is pushed to a row in the sheet automatically.</p>
+        <p style="font-size:11px;color:var(--ink-soft);margin:0;">Requires a Google Cloud OAuth Client ID with the Sheets API enabled, and this page served over http/https (not opened as a double-clicked file). Once connected, bookings and properties sync <strong>both ways</strong> — connecting on another device pulls in everything already in the sheet, and anything entered locally gets pushed up too. A second "Properties" tab is created automatically for property details. (iCal feed links stay local to each device.)</p>
       </div>
       <div id="properties-list"></div>
     </div>
@@ -555,7 +555,11 @@ let currentView = 'dashboard';
 let sheetSync = { clientId:'', spreadsheetId:'', sheetName:'Guests' };
 let sheetAccessToken = null;
 let sheetTokenClient = null;
-let sheetGidCache = null;
+let sheetGidCache = {};
+let sheetSilentAttempt = false;
+const PROPERTIES_TAB = 'Properties';
+const BOOKING_HEADER = ['Booking ID','Guest name','Contact','Property','Platform','Agency/Agent','Check-in','Check-out','Guests','Notes','Last updated','Property ID'];
+const PROPERTY_HEADER = ['Property ID','Name','Address','Notes','Last updated'];
 
 async function storageGet(key){
   try{
@@ -616,12 +620,13 @@ async function init(){
   sheetSync = (await storageGet('sheetSync')) || { clientId:'', spreadsheetId:'', sheetName:'Guests' };
   populatePropertySelects();
   renderAll();
+  window.addEventListener('load', attemptSilentSheetReconnect);
 }
 
-/* ---------------- Google Sheets sync ---------------- */
+/* ---------------- Google Sheets sync (two-way: bookings + properties) ---------------- */
 function updateSheetStatus(connected){
   const el = document.getElementById('sheet-status');
-  if(el) el.textContent = connected ? 'Connected — new and edited bookings sync automatically' : 'Not connected';
+  if(el) el.textContent = connected ? 'Connected — bookings and properties sync both ways' : 'Not connected';
 }
 
 async function saveSheetConfig(){
@@ -630,7 +635,7 @@ async function saveSheetConfig(){
   sheetSync.sheetName = document.getElementById('sheet-tab-name').value.trim() || 'Guests';
   await storageSet('sheetSync', sheetSync);
   sheetTokenClient = null;
-  sheetGidCache = null;
+  sheetGidCache = {};
   showToast('Google Sheet settings saved');
 }
 
@@ -640,10 +645,12 @@ function initSheetAuth(){
     client_id: sheetSync.clientId,
     scope: 'https://www.googleapis.com/auth/spreadsheets',
     callback: (resp) => {
-      if(resp.error){ showToast('Google sign-in failed'); return; }
+      const silent = sheetSilentAttempt;
+      sheetSilentAttempt = false;
+      if(resp.error){ if(!silent) showToast('Google sign-in failed'); return; }
       sheetAccessToken = resp.access_token;
       updateSheetStatus(true);
-      showToast('Connected to Google Sheets');
+      twoWaySync();
     }
   });
 }
@@ -653,7 +660,18 @@ function connectGoogleSheet(){
   if(!window.google || !window.google.accounts || !window.google.accounts.oauth2){ showToast('Google sign-in library not loaded — check your internet connection'); return; }
   if(!sheetTokenClient) initSheetAuth();
   if(!sheetTokenClient){ showToast('Could not start Google sign-in'); return; }
+  sheetSilentAttempt = false;
   sheetTokenClient.requestAccessToken({ prompt: sheetAccessToken ? '' : 'consent' });
+}
+
+function attemptSilentSheetReconnect(){
+  if(sheetAccessToken) return;
+  if(!sheetSync.clientId || !sheetSync.spreadsheetId) return;
+  if(!window.google || !window.google.accounts || !window.google.accounts.oauth2) return;
+  if(!sheetTokenClient) initSheetAuth();
+  if(!sheetTokenClient) return;
+  sheetSilentAttempt = true;
+  sheetTokenClient.requestAccessToken({ prompt: '' });
 }
 
 async function sheetsFetch(suffix, options={}){
@@ -667,25 +685,60 @@ async function sheetsFetch(suffix, options={}){
   return res.json();
 }
 
-async function ensureSheetHeader(){
-  const range = `${sheetSync.sheetName}!A1:K1`;
-  const data = await sheetsFetch(`/values/${encodeURIComponent(range)}`);
-  if(!data.values || data.values.length===0){
-    await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, {
-      method: 'PUT',
-      body: JSON.stringify({ values: [['Booking ID','Guest name','Contact','Property','Platform','Agency/Agent','Check-in','Check-out','Guests','Notes','Last updated']] })
+function colLetter(n){ return String.fromCharCode(64+n); }
+
+async function ensureTabExists(tabName){
+  const meta = await sheetsFetch('');
+  const exists = (meta.sheets||[]).some(s=>s.properties.title === tabName);
+  if(!exists){
+    await sheetsFetch(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tabName } } }] })
     });
   }
 }
 
-async function findRowForBooking(bookingId){
-  const range = `${sheetSync.sheetName}!A:A`;
+async function ensureSheetHeader(tabName, headerRow){
+  await ensureTabExists(tabName);
+  const range = `${tabName}!A1:${colLetter(headerRow.length)}1`;
+  const data = await sheetsFetch(`/values/${encodeURIComponent(range)}`);
+  if(!data.values || data.values.length===0){
+    await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, {
+      method: 'PUT',
+      body: JSON.stringify({ values: [headerRow] })
+    });
+  }
+}
+
+async function findRowByFirstColumn(tabName, key){
+  const range = `${tabName}!A:A`;
   const data = await sheetsFetch(`/values/${encodeURIComponent(range)}`);
   const rows = data.values || [];
-  for(let i=0;i<rows.length;i++){ if(rows[i][0]===bookingId) return i+1; }
+  for(let i=0;i<rows.length;i++){ if(rows[i][0]===key) return i+1; }
   return null;
 }
 
+async function fetchSheetRows(tabName, lastCol){
+  try{
+    const range = `${tabName}!A2:${lastCol}100000`;
+    const data = await sheetsFetch(`/values/${encodeURIComponent(range)}`);
+    return (data.values || []).filter(r=>r && r[0]);
+  }catch(err){
+    console.error('fetch rows failed for '+tabName, err);
+    return [];
+  }
+}
+
+async function getTabGid(tabName){
+  if(sheetGidCache[tabName] !== undefined) return sheetGidCache[tabName];
+  const data = await sheetsFetch('');
+  const sheet = (data.sheets||[]).find(s=>s.properties.title === tabName);
+  const gid = sheet ? sheet.properties.sheetId : 0;
+  sheetGidCache[tabName] = gid;
+  return gid;
+}
+
+/* ---- bookings ---- */
 function bookingToSheetRow(b){
   return [
     b.id,
@@ -698,21 +751,39 @@ function bookingToSheetRow(b){
     b.checkOut,
     String(b.guests),
     b.notes || '',
-    new Date().toISOString()
+    b.updatedAt || new Date().toISOString(),
+    b.propertyId || ''
   ];
+}
+
+function sheetRowToBooking(row){
+  return {
+    id: row[0],
+    guestName: row[1] || '',
+    contact: row[2] || '',
+    propertyNameHint: row[3] || '',
+    platform: row[4] || 'Other',
+    agency: row[5] || '',
+    checkIn: row[6] || '',
+    checkOut: row[7] || '',
+    guests: parseInt(row[8],10) || 1,
+    notes: row[9] || '',
+    updatedAt: row[10] || null,
+    propertyId: row[11] || null,
+  };
 }
 
 async function syncBookingToSheet(b){
   if(!sheetAccessToken || !sheetSync.spreadsheetId) return;
   try{
-    await ensureSheetHeader();
+    await ensureSheetHeader(sheetSync.sheetName, BOOKING_HEADER);
     const row = bookingToSheetRow(b);
-    const existingRow = await findRowForBooking(b.id);
+    const existingRow = await findRowByFirstColumn(sheetSync.sheetName, b.id);
     if(existingRow){
-      const range = `${sheetSync.sheetName}!A${existingRow}:K${existingRow}`;
+      const range = `${sheetSync.sheetName}!A${existingRow}:${colLetter(BOOKING_HEADER.length)}${existingRow}`;
       await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, { method:'PUT', body: JSON.stringify({ values:[row] }) });
     } else {
-      const range = `${sheetSync.sheetName}!A:K`;
+      const range = `${sheetSync.sheetName}!A:${colLetter(BOOKING_HEADER.length)}`;
       await sheetsFetch(`/values/${encodeURIComponent(range)}:append?valueInputOption=RAW`, { method:'POST', body: JSON.stringify({ values:[row] }) });
     }
   }catch(err){
@@ -720,20 +791,12 @@ async function syncBookingToSheet(b){
   }
 }
 
-async function getSheetGid(){
-  if(sheetGidCache !== null) return sheetGidCache;
-  const data = await sheetsFetch('');
-  const sheet = (data.sheets||[]).find(s=>s.properties.title === sheetSync.sheetName);
-  sheetGidCache = sheet ? sheet.properties.sheetId : 0;
-  return sheetGidCache;
-}
-
 async function removeBookingFromSheet(bookingId){
   if(!sheetAccessToken || !sheetSync.spreadsheetId) return;
   try{
-    const rowNum = await findRowForBooking(bookingId);
+    const rowNum = await findRowByFirstColumn(sheetSync.sheetName, bookingId);
     if(!rowNum) return;
-    const gid = await getSheetGid();
+    const gid = await getTabGid(sheetSync.sheetName);
     await sheetsFetch(':batchUpdate', {
       method: 'POST',
       body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: gid, dimension: 'ROWS', startIndex: rowNum-1, endIndex: rowNum } } }] })
@@ -743,12 +806,147 @@ async function removeBookingFromSheet(bookingId){
   }
 }
 
-async function syncAllBookingsToSheet(){
+function mergePulledBookings(remoteRows){
+  let added=0, updated=0;
+  remoteRows.forEach(row=>{
+    const remote = sheetRowToBooking(row);
+    if(!remote.id || !remote.checkIn || !remote.checkOut) return;
+    let propertyId = remote.propertyId && properties.some(p=>p.id===remote.propertyId) ? remote.propertyId : null;
+    if(!propertyId && remote.propertyNameHint){
+      const match = properties.find(p=>p.name.trim().toLowerCase()===remote.propertyNameHint.trim().toLowerCase());
+      if(match) propertyId = match.id;
+    }
+    const local = bookings.find(b=>b.id===remote.id);
+    if(local){
+      const remoteTime = remote.updatedAt ? Date.parse(remote.updatedAt) || 0 : 0;
+      const localTime = local.updatedAt ? Date.parse(local.updatedAt) || 0 : 0;
+      if(remoteTime > localTime){
+        Object.assign(local, {
+          guestName: remote.guestName, contact: remote.contact, platform: remote.platform,
+          agency: remote.agency, checkIn: remote.checkIn, checkOut: remote.checkOut,
+          guests: remote.guests, notes: remote.notes,
+          propertyId: propertyId || local.propertyId,
+          updatedAt: remote.updatedAt,
+        });
+        updated++;
+      }
+    } else {
+      bookings.push({
+        id: remote.id, propertyId, platform: remote.platform,
+        guests: remote.guests, guestName: remote.guestName,
+        checkIn: remote.checkIn, checkOut: remote.checkOut,
+        contact: remote.contact, agency: remote.agency, notes: remote.notes,
+        updatedAt: remote.updatedAt || new Date().toISOString(),
+        source: 'sheet',
+      });
+      added++;
+    }
+  });
+  return { added, updated };
+}
+
+/* ---- properties ---- */
+function propertyToSheetRow(p){
+  return [p.id, p.name, p.address || '', p.notes || '', p.updatedAt || new Date().toISOString()];
+}
+
+function sheetRowToProperty(row){
+  return { id: row[0], name: row[1] || '', address: row[2] || '', notes: row[3] || '', updatedAt: row[4] || null };
+}
+
+async function syncPropertyToSheet(p){
+  if(!sheetAccessToken || !sheetSync.spreadsheetId) return;
+  try{
+    await ensureSheetHeader(PROPERTIES_TAB, PROPERTY_HEADER);
+    const row = propertyToSheetRow(p);
+    const existingRow = await findRowByFirstColumn(PROPERTIES_TAB, p.id);
+    if(existingRow){
+      const range = `${PROPERTIES_TAB}!A${existingRow}:${colLetter(PROPERTY_HEADER.length)}${existingRow}`;
+      await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, { method:'PUT', body: JSON.stringify({ values:[row] }) });
+    } else {
+      const range = `${PROPERTIES_TAB}!A:${colLetter(PROPERTY_HEADER.length)}`;
+      await sheetsFetch(`/values/${encodeURIComponent(range)}:append?valueInputOption=RAW`, { method:'POST', body: JSON.stringify({ values:[row] }) });
+    }
+  }catch(err){
+    console.error('property sheet sync failed', err);
+  }
+}
+
+async function removePropertyFromSheet(propertyId){
+  if(!sheetAccessToken || !sheetSync.spreadsheetId) return;
+  try{
+    const rowNum = await findRowByFirstColumn(PROPERTIES_TAB, propertyId);
+    if(!rowNum) return;
+    const gid = await getTabGid(PROPERTIES_TAB);
+    await sheetsFetch(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: gid, dimension: 'ROWS', startIndex: rowNum-1, endIndex: rowNum } } }] })
+    });
+  }catch(err){
+    console.error('property sheet delete failed', err);
+  }
+}
+
+function mergePulledProperties(remoteRows){
+  let added=0, updated=0;
+  remoteRows.forEach(row=>{
+    const remote = sheetRowToProperty(row);
+    if(!remote.id || !remote.name) return;
+    let local = properties.find(p=>p.id===remote.id);
+    if(!local){
+      local = properties.find(p=>p.name.trim().toLowerCase()===remote.name.trim().toLowerCase());
+      if(local && local.id !== remote.id){
+        const oldId = local.id;
+        local.id = remote.id;
+        bookings.forEach(b=>{ if(b.propertyId===oldId) b.propertyId = remote.id; });
+      }
+    }
+    if(local){
+      const remoteTime = remote.updatedAt ? Date.parse(remote.updatedAt) || 0 : 0;
+      const localTime = local.updatedAt ? Date.parse(local.updatedAt) || 0 : 0;
+      if(remoteTime > localTime){
+        local.name = remote.name; local.address = remote.address; local.notes = remote.notes; local.updatedAt = remote.updatedAt;
+        updated++;
+      }
+    } else {
+      properties.push({ id: remote.id, name: remote.name, address: remote.address, notes: remote.notes, updatedAt: remote.updatedAt || new Date().toISOString(), icalFeeds: [] });
+      added++;
+    }
+  });
+  return { added, updated };
+}
+
+/* ---- two-way sync entrypoint ---- */
+async function twoWaySync(){
   if(!sheetAccessToken){ showToast('Connect your Google account first'); return; }
-  if(bookings.length===0){ showToast('No bookings to sync yet'); return; }
-  showToast('Syncing all bookings…');
-  for(const b of bookings){ await syncBookingToSheet(b); }
-  showToast('All bookings synced to Google Sheet');
+  if(!sheetSync.spreadsheetId){ showToast('Enter a Spreadsheet ID, then Save settings first'); return; }
+  showToast('Syncing with Google Sheet…');
+  try{
+    await ensureSheetHeader(sheetSync.sheetName, BOOKING_HEADER);
+    await ensureSheetHeader(PROPERTIES_TAB, PROPERTY_HEADER);
+
+    const propRows = await fetchSheetRows(PROPERTIES_TAB, colLetter(PROPERTY_HEADER.length));
+    const propResult = mergePulledProperties(propRows);
+
+    const bookingRows = await fetchSheetRows(sheetSync.sheetName, colLetter(BOOKING_HEADER.length));
+    const bookingResult = mergePulledBookings(bookingRows);
+
+    await storageSet('properties', properties);
+    await storageSet('bookings', bookings);
+    populatePropertySelects();
+    renderAll();
+
+    for(const p of properties) await syncPropertyToSheet(p);
+    for(const b of bookings) await syncBookingToSheet(b);
+
+    const total = propResult.added + propResult.updated + bookingResult.added + bookingResult.updated;
+    showToast(total>0
+      ? `Synced — ${bookingResult.added} new & ${bookingResult.updated} updated booking(s), ${propResult.added} new & ${propResult.updated} updated propert${(propResult.added+propResult.updated)===1?'y':'ies'}`
+      : 'Already up to date with the sheet');
+  }catch(err){
+    console.error('two-way sync failed', err);
+    showToast('Sync with Google Sheet failed — see console for details');
+  }
 }
 
 function renderAll(){
@@ -1399,11 +1597,14 @@ function editProperty(id){
 async function saveProperty(e){
   e.preventDefault();
   const id = document.getElementById('p-id').value;
+  const existing = properties.find(p=>p.id===id);
   const data = {
     id: id || uid(),
     name: document.getElementById('p-name').value.trim(),
     address: document.getElementById('p-address').value.trim(),
     notes: document.getElementById('p-notes').value.trim(),
+    icalFeeds: existing ? (existing.icalFeeds || []) : [],
+    updatedAt: new Date().toISOString(),
   };
   if(id){
     properties = properties.map(p=>p.id===id ? data : p);
@@ -1411,6 +1612,7 @@ async function saveProperty(e){
     properties.push(data);
   }
   await storageSet('properties', properties);
+  syncPropertyToSheet(data);
   populatePropertySelects();
   closeModal('property-overlay');
   renderAll();
@@ -1427,6 +1629,7 @@ async function deleteProperty(){
   }
   properties = properties.filter(p=>p.id!==id);
   await storageSet('properties', properties);
+  removePropertyFromSheet(id);
   populatePropertySelects();
   closeModal('property-overlay');
   renderAll();
