@@ -331,6 +331,7 @@
           <p class="sub">Every reservation across every channel.</p>
         </div>
         <div style="display:flex;gap:8px;">
+          <button class="btn" onclick="refreshBookings()">↻ Refresh</button>
           <button class="btn" onclick="quickScanNewBooking()">📷 Scan screenshot</button>
           <button class="btn btn-primary" onclick="openBookingModal()">+ New booking</button>
         </div>
@@ -996,6 +997,15 @@ async function twoWaySync(){
   }catch(err){
     console.error('two-way sync failed', err);
     showToast('Sync with Google Sheet failed — see console for details');
+  }
+}
+
+async function refreshBookings(){
+  if(sheetAccessToken){
+    await twoWaySync();
+  } else {
+    renderAll();
+    showToast('Refreshed from local data — connect Google Sheets sync (Properties view) to pull in changes from other devices');
   }
 }
 
