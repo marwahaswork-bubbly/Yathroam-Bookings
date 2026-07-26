@@ -568,6 +568,7 @@ let sheetAccessToken = null;
 let sheetTokenClient = null;
 let sheetGidCache = {};
 let sheetSilentAttempt = false;
+let sheetManualFallbackPending = false;
 const PROPERTIES_TAB = 'Properties';
 const BOOKING_HEADER = ['Booking ID','Guest name','Contact','Property','Platform','Agency/Agent','Check-in','Check-out','Guests','Notes','Last updated','Property ID'];
 const PROPERTY_HEADER = ['Property ID','Name','Address','Notes','Last updated','Listing title(s)'];
@@ -663,8 +664,17 @@ function initSheetAuth(){
     scope: 'https://www.googleapis.com/auth/spreadsheets',
     callback: (resp) => {
       const silent = sheetSilentAttempt;
+      const fallbackPending = sheetManualFallbackPending;
       sheetSilentAttempt = false;
-      if(resp.error){ if(!silent) showToast('Google sign-in failed'); return; }
+      sheetManualFallbackPending = false;
+      if(resp.error){
+        if(fallbackPending){
+          sheetTokenClient.requestAccessToken({ prompt: 'consent' });
+          return;
+        }
+        if(!silent) showToast('Google sign-in failed');
+        return;
+      }
       sheetAccessToken = resp.access_token;
       updateSheetStatus(true);
       twoWaySync();
@@ -678,7 +688,8 @@ function connectGoogleSheet(){
   if(!sheetTokenClient) initSheetAuth();
   if(!sheetTokenClient){ showToast('Could not start Google sign-in'); return; }
   sheetSilentAttempt = false;
-  sheetTokenClient.requestAccessToken({ prompt: sheetAccessToken ? '' : 'consent' });
+  sheetManualFallbackPending = true;
+  sheetTokenClient.requestAccessToken({ prompt: '' });
 }
 
 function attemptSilentSheetReconnect(){
