@@ -803,6 +803,8 @@ async function syncBookingToSheet(b){
       const range = `${sheetSync.sheetName}!A:${colLetter(BOOKING_HEADER.length)}`;
       await sheetsFetch(`/values/${encodeURIComponent(range)}:append?valueInputOption=RAW`, { method:'POST', body: JSON.stringify({ values:[row] }) });
     }
+    b.syncedToSheet = true;
+    await storageSet('bookings', bookings);
   }catch(err){
     console.error('sheet sync failed', err);
   }
@@ -824,10 +826,12 @@ async function removeBookingFromSheet(bookingId){
 }
 
 function mergePulledBookings(remoteRows){
-  let added=0, updated=0;
+  let added=0, updated=0, removed=0;
+  const remoteIds = new Set();
   remoteRows.forEach(row=>{
     const remote = sheetRowToBooking(row);
     if(!remote.id || !remote.checkIn || !remote.checkOut) return;
+    remoteIds.add(remote.id);
     let propertyId = remote.propertyId && properties.some(p=>p.id===remote.propertyId) ? remote.propertyId : null;
     if(!propertyId && remote.propertyNameHint){
       const match = properties.find(p=>p.name.trim().toLowerCase()===remote.propertyNameHint.trim().toLowerCase());
@@ -835,6 +839,7 @@ function mergePulledBookings(remoteRows){
     }
     const local = bookings.find(b=>b.id===remote.id);
     if(local){
+      local.syncedToSheet = true;
       const remoteTime = remote.updatedAt ? Date.parse(remote.updatedAt) || 0 : 0;
       const localTime = local.updatedAt ? Date.parse(local.updatedAt) || 0 : 0;
       if(remoteTime > localTime){
@@ -854,12 +859,15 @@ function mergePulledBookings(remoteRows){
         checkIn: remote.checkIn, checkOut: remote.checkOut,
         contact: remote.contact, agency: remote.agency, notes: remote.notes,
         updatedAt: remote.updatedAt || new Date().toISOString(),
-        source: 'sheet',
+        source: 'sheet', syncedToSheet: true,
       });
       added++;
     }
   });
-  return { added, updated };
+  const before = bookings.length;
+  bookings = bookings.filter(b => !(b.syncedToSheet && !remoteIds.has(b.id)));
+  removed = before - bookings.length;
+  return { added, updated, removed };
 }
 
 /* ---- properties ---- */
@@ -887,6 +895,8 @@ async function syncPropertyToSheet(p){
       const range = `${PROPERTIES_TAB}!A:${colLetter(PROPERTY_HEADER.length)}`;
       await sheetsFetch(`/values/${encodeURIComponent(range)}:append?valueInputOption=RAW`, { method:'POST', body: JSON.stringify({ values:[row] }) });
     }
+    p.syncedToSheet = true;
+    await storageSet('properties', properties);
   }catch(err){
     console.error('property sheet sync failed', err);
   }
@@ -908,7 +918,8 @@ async function removePropertyFromSheet(propertyId){
 }
 
 function mergePulledProperties(remoteRows){
-  let added=0, updated=0;
+  let added=0, updated=0, removed=0;
+  const remoteIds = new Set();
   remoteRows.forEach(row=>{
     const remote = sheetRowToProperty(row);
     if(!remote.id || !remote.name) return;
@@ -921,7 +932,9 @@ function mergePulledProperties(remoteRows){
         bookings.forEach(b=>{ if(b.propertyId===oldId) b.propertyId = remote.id; });
       }
     }
+    remoteIds.add(remote.id);
     if(local){
+      local.syncedToSheet = true;
       const remoteTime = remote.updatedAt ? Date.parse(remote.updatedAt) || 0 : 0;
       const localTime = local.updatedAt ? Date.parse(local.updatedAt) || 0 : 0;
       if(remoteTime > localTime){
@@ -930,11 +943,14 @@ function mergePulledProperties(remoteRows){
         updated++;
       }
     } else {
-      properties.push({ id: remote.id, name: remote.name, address: remote.address, notes: remote.notes, listingAliases: remote.listingAliases, updatedAt: remote.updatedAt || new Date().toISOString(), icalFeeds: [] });
+      properties.push({ id: remote.id, name: remote.name, address: remote.address, notes: remote.notes, listingAliases: remote.listingAliases, updatedAt: remote.updatedAt || new Date().toISOString(), icalFeeds: [], syncedToSheet: true });
       added++;
     }
   });
-  return { added, updated };
+  const before = properties.length;
+  properties = properties.filter(p => !(p.syncedToSheet && !remoteIds.has(p.id) && !bookings.some(b=>b.propertyId===p.id)));
+  removed = before - properties.length;
+  return { added, updated, removed };
 }
 
 /* ---- two-way sync entrypoint ---- */
@@ -960,9 +976,11 @@ async function twoWaySync(){
     for(const p of properties) await syncPropertyToSheet(p);
     for(const b of bookings) await syncBookingToSheet(b);
 
-    const total = propResult.added + propResult.updated + bookingResult.added + bookingResult.updated;
+    const total = propResult.added + propResult.updated + propResult.removed + bookingResult.added + bookingResult.updated + bookingResult.removed;
+    const removedNote = (bookingResult.removed + propResult.removed) > 0
+      ? `, ${bookingResult.removed + propResult.removed} removed (deleted elsewhere)` : '';
     showToast(total>0
-      ? `Synced — ${bookingResult.added} new & ${bookingResult.updated} updated booking(s), ${propResult.added} new & ${propResult.updated} updated propert${(propResult.added+propResult.updated)===1?'y':'ies'}`
+      ? `Synced — ${bookingResult.added} new & ${bookingResult.updated} updated booking(s), ${propResult.added} new & ${propResult.updated} updated propert${(propResult.added+propResult.updated)===1?'y':'ies'}${removedNote}`
       : 'Already up to date with the sheet');
   }catch(err){
     console.error('two-way sync failed', err);
