@@ -413,8 +413,9 @@
     <form id="booking-form" onsubmit="saveBooking(event)">
       <input type="hidden" id="b-id">
       <div class="form-row" style="border:1px dashed var(--line);border-radius:8px;padding:12px;text-align:center;">
-        <button type="button" class="btn btn-sm" onclick="triggerScreenshotUpload()">📷 Scan Airbnb / Booking.com screenshot</button>
-        <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving.</div>
+        <button type="button" class="btn btn-sm" onclick="triggerScreenshotUpload()">📷 Scan Airbnb / Booking.com screenshot(s)</button>
+        <button type="button" class="btn btn-sm" id="scan-skip-btn" onclick="skipToNextScreenshot()" style="display:none;">Skip to next screenshot →</button>
+        <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they'll be scanned one at a time, one booking per screenshot.</div>
       </div>
       <div class="form-row">
         <label>Property</label>
@@ -490,6 +491,11 @@
         <label>Notes</label>
         <textarea id="p-notes" rows="2" placeholder="Gate code, wifi password, etc."></textarea>
       </div>
+      <div class="form-row">
+        <label>Listing title(s) on Airbnb/Booking.com (one per line)</label>
+        <textarea id="p-aliases" rows="2" placeholder="e.g. Stone Villa Verdant Hills Vagamon"></textarea>
+        <p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Since the title shown on the platform is often different from the name you use here, add it so scanned screenshots can be matched to the right property.</p>
+      </div>
       <div class="form-row" id="p-feeds-section" style="display:none;border-top:1px solid var(--line);padding-top:14px;margin-top:2px;">
         <label>Calendar sync (iCal)</label>
         <div id="p-feeds-list"></div>
@@ -544,7 +550,7 @@
 </div>
 
 <input type="file" id="ics-file-input" accept=".ics,text/calendar" style="display:none;" onchange="handleIcsFileUpload(event)">
-<input type="file" id="screenshot-file-input" accept="image/*" style="display:none;" onchange="handleScreenshotUpload(event)">
+<input type="file" id="screenshot-file-input" accept="image/*" multiple style="display:none;" onchange="handleScreenshotUpload(event)">
 <div class="toast" id="toast"></div>
 
 <script>
@@ -552,14 +558,19 @@ let properties = [];
 let bookings = [];
 let currentView = 'dashboard';
 
-let sheetSync = { clientId:'', spreadsheetId:'', sheetName:'Guests' };
+const DEFAULT_SHEET_SYNC = {
+  clientId: '517052187694-fuudj54ki1ttm51lt5p0a1d74lsvk182.apps.googleusercontent.com',
+  spreadsheetId: '1di2FD8iCjqQVh1IEqAjqQbukigsWSemnS6akaVr2FnA',
+  sheetName: 'Guests',
+};
+let sheetSync = { ...DEFAULT_SHEET_SYNC };
 let sheetAccessToken = null;
 let sheetTokenClient = null;
 let sheetGidCache = {};
 let sheetSilentAttempt = false;
 const PROPERTIES_TAB = 'Properties';
 const BOOKING_HEADER = ['Booking ID','Guest name','Contact','Property','Platform','Agency/Agent','Check-in','Check-out','Guests','Notes','Last updated','Property ID'];
-const PROPERTY_HEADER = ['Property ID','Name','Address','Notes','Last updated'];
+const PROPERTY_HEADER = ['Property ID','Name','Address','Notes','Last updated','Listing title(s)'];
 
 async function storageGet(key){
   try{
@@ -599,15 +610,15 @@ function platformTagClass(p){
 }
 
 const DEFAULT_PROPERTIES = [
-  { id: uid(), name: 'Tea Haven - Entire Home', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/homevillavagamon' },
-  { id: uid(), name: 'Tea Haven - Top Floor', address: 'Vagamon, India', notes: '' },
-  { id: uid(), name: 'Tea Haven - Ground Floor', address: 'Vagamon, India', notes: '' },
-  { id: uid(), name: 'Verdant Hills', address: 'Idukki, India', notes: 'Airbnb: airbnb.co.in/h/vagamonstonehouse' },
-  { id: uid(), name: 'Lake House', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/orilakehouse' },
-  { id: uid(), name: 'Brooke Valley - Brooklin Villa', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/yathroambrooke' },
-  { id: uid(), name: 'Halom casa - Homely castle', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/yathroamvilla' },
-  { id: uid(), name: 'Pearl valley - Valley crest', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/valley-crest-yathroam' },
-  { id: uid(), name: 'Shadow Moon - Valley View', address: 'Kolahalamedu, India', notes: 'Airbnb: airbnb.co.in/h/valleyviewhomevagamon' },
+  { id: uid(), name: 'Tea Haven - Entire Home', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/homevillavagamon', listingAliases: ['Tea haven home in vagamon'] },
+  { id: uid(), name: 'Tea Haven - Top Floor', address: 'Vagamon, India', notes: '', listingAliases: [] },
+  { id: uid(), name: 'Tea Haven - Ground Floor', address: 'Vagamon, India', notes: '', listingAliases: [] },
+  { id: uid(), name: 'Verdant Hills - 2BHK', address: 'Idukki, India', notes: 'Airbnb: airbnb.co.in/h/vagamonstonehouse', listingAliases: ['Stone Villa Verdant Hills Vagamon'] },
+  { id: uid(), name: 'Lake House', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/orilakehouse', listingAliases: [] },
+  { id: uid(), name: 'Brooke Valley - Brooklin Villa', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/yathroambrooke', listingAliases: ['2 bed room private pool villa'] },
+  { id: uid(), name: 'Halom casa - Homely castle', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/yathroamvilla', listingAliases: ['3 Bedroom Pool villa with Mountain View'] },
+  { id: uid(), name: 'Pearl valley - Valley crest', address: 'Vagamon, India', notes: 'Airbnb: airbnb.co.in/h/valley-crest-yathroam', listingAliases: ['4 Bedroom Pool villa in Vagamon'] },
+  { id: uid(), name: 'Shadow Moon - Valley View', address: 'Kolahalamedu, India', notes: 'Airbnb: airbnb.co.in/h/valleyviewhomevagamon', listingAliases: ['Valley view home with spacious balcony'] },
 ];
 
 async function init(){
@@ -617,7 +628,7 @@ async function init(){
     await storageSet('properties', properties);
   }
   bookings = (await storageGet('bookings')) || [];
-  sheetSync = (await storageGet('sheetSync')) || { clientId:'', spreadsheetId:'', sheetName:'Guests' };
+  sheetSync = (await storageGet('sheetSync')) || { ...DEFAULT_SHEET_SYNC };
   populatePropertySelects();
   renderAll();
   window.addEventListener('load', attemptSilentSheetReconnect);
@@ -629,9 +640,15 @@ function updateSheetStatus(connected){
   if(el) el.textContent = connected ? 'Connected — bookings and properties sync both ways' : 'Not connected';
 }
 
+function extractSpreadsheetId(value){
+  const urlMatch = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  return urlMatch ? urlMatch[1] : value;
+}
+
 async function saveSheetConfig(){
   sheetSync.clientId = document.getElementById('sheet-client-id').value.trim();
-  sheetSync.spreadsheetId = document.getElementById('sheet-spreadsheet-id').value.trim();
+  sheetSync.spreadsheetId = extractSpreadsheetId(document.getElementById('sheet-spreadsheet-id').value.trim());
+  document.getElementById('sheet-spreadsheet-id').value = sheetSync.spreadsheetId;
   sheetSync.sheetName = document.getElementById('sheet-tab-name').value.trim() || 'Guests';
   await storageSet('sheetSync', sheetSync);
   sheetTokenClient = null;
@@ -847,11 +864,14 @@ function mergePulledBookings(remoteRows){
 
 /* ---- properties ---- */
 function propertyToSheetRow(p){
-  return [p.id, p.name, p.address || '', p.notes || '', p.updatedAt || new Date().toISOString()];
+  return [p.id, p.name, p.address || '', p.notes || '', p.updatedAt || new Date().toISOString(), (p.listingAliases || []).join(' | ')];
 }
 
 function sheetRowToProperty(row){
-  return { id: row[0], name: row[1] || '', address: row[2] || '', notes: row[3] || '', updatedAt: row[4] || null };
+  return {
+    id: row[0], name: row[1] || '', address: row[2] || '', notes: row[3] || '', updatedAt: row[4] || null,
+    listingAliases: row[5] ? row[5].split('|').map(s=>s.trim()).filter(Boolean) : [],
+  };
 }
 
 async function syncPropertyToSheet(p){
@@ -905,11 +925,12 @@ function mergePulledProperties(remoteRows){
       const remoteTime = remote.updatedAt ? Date.parse(remote.updatedAt) || 0 : 0;
       const localTime = local.updatedAt ? Date.parse(local.updatedAt) || 0 : 0;
       if(remoteTime > localTime){
-        local.name = remote.name; local.address = remote.address; local.notes = remote.notes; local.updatedAt = remote.updatedAt;
+        local.name = remote.name; local.address = remote.address; local.notes = remote.notes;
+        local.listingAliases = remote.listingAliases; local.updatedAt = remote.updatedAt;
         updated++;
       }
     } else {
-      properties.push({ id: remote.id, name: remote.name, address: remote.address, notes: remote.notes, updatedAt: remote.updatedAt || new Date().toISOString(), icalFeeds: [] });
+      properties.push({ id: remote.id, name: remote.name, address: remote.address, notes: remote.notes, listingAliases: remote.listingAliases, updatedAt: remote.updatedAt || new Date().toISOString(), icalFeeds: [] });
       added++;
     }
   });
@@ -1489,9 +1510,16 @@ async function commitBookingSave(data){
   }
   await storageSet('bookings', bookings);
   syncBookingToSheet(data);
-  closeModal('booking-overlay');
   renderAll();
-  showToast('Booking saved');
+  if(screenshotQueue.length>0){
+    const next = screenshotQueue.shift();
+    openBookingModal();
+    showToast(`Booking saved — scanning next screenshot${screenshotQueue.length>0 ? ` (${screenshotQueue.length} left after this one)` : ''}`);
+    await processScreenshotFile(next);
+  } else {
+    closeModal('booking-overlay');
+    showToast('Booking saved');
+  }
 }
 
 let pendingBookingData = null;
@@ -1589,6 +1617,7 @@ function editProperty(id){
   document.getElementById('p-name').value = p.name;
   document.getElementById('p-address').value = p.address || '';
   document.getElementById('p-notes').value = p.notes || '';
+  document.getElementById('p-aliases').value = (p.listingAliases || []).join('\n');
   document.getElementById('p-delete').style.display='';
   renderFeedsSection(p);
   document.getElementById('property-overlay').classList.add('open');
@@ -1603,6 +1632,7 @@ async function saveProperty(e){
     name: document.getElementById('p-name').value.trim(),
     address: document.getElementById('p-address').value.trim(),
     notes: document.getElementById('p-notes').value.trim(),
+    listingAliases: document.getElementById('p-aliases').value.split('\n').map(s=>s.trim()).filter(Boolean),
     icalFeeds: existing ? (existing.icalFeeds || []) : [],
     updatedAt: new Date().toISOString(),
   };
@@ -1730,11 +1760,19 @@ function handleIcsFileUpload(e){
 }
 
 /* ---------------- Booking screenshot OCR import ---------------- */
-const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving.';
+const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they\'ll be scanned one at a time, one booking per screenshot.';
+
+let screenshotQueue = [];
 
 function resetScanStatus(){
   const el = document.getElementById('scan-status');
   if(el) el.textContent = SCAN_DEFAULT_MSG;
+  updateScanSkipButton();
+}
+
+function updateScanSkipButton(){
+  const btn = document.getElementById('scan-skip-btn');
+  if(btn) btn.style.display = screenshotQueue.length>0 ? '' : 'none';
 }
 
 function quickScanNewBooking(){
@@ -1751,28 +1789,42 @@ function triggerScreenshotUpload(){
   document.getElementById('screenshot-file-input').click();
 }
 
+function skipToNextScreenshot(){
+  if(screenshotQueue.length===0){ showToast('No more queued screenshots'); return; }
+  const next = screenshotQueue.shift();
+  openBookingModal();
+  processScreenshotFile(next);
+}
+
 async function handleScreenshotUpload(e){
-  const file = e.target.files[0];
+  const files = Array.from(e.target.files || []);
   e.target.value='';
-  if(!file) return;
+  if(files.length===0) return;
+  screenshotQueue = files.slice(1);
+  await processScreenshotFile(files[0]);
+}
+
+async function processScreenshotFile(file){
   const statusEl = document.getElementById('scan-status');
+  updateScanSkipButton();
+  const queueNote = screenshotQueue.length>0 ? ` (${screenshotQueue.length} more queued after this one)` : '';
   if(typeof Tesseract === 'undefined'){
-    statusEl.textContent = 'OCR library failed to load — check your internet connection and try again.';
+    statusEl.textContent = 'OCR library failed to load — check your internet connection and try again.' + queueNote;
     showToast('OCR unavailable right now');
     return;
   }
-  statusEl.textContent = 'Reading screenshot… this can take a few seconds.';
+  statusEl.textContent = `Reading screenshot…${queueNote} this can take a few seconds.`;
   try{
     const { data:{ text } } = await Tesseract.recognize(file, 'eng');
     const parsed = parseBookingScreenshot(text);
     applyParsedBooking(parsed);
-    statusEl.textContent = parsed.matched
+    statusEl.textContent = (parsed.matched
       ? `Detected ${parsed.platform || 'booking'} details from the screenshot — double-check dates and guest name, then save.`
-      : `Couldn't confidently read that screenshot — please fill in the details manually.`;
+      : `Couldn't confidently read that screenshot — please fill in the details manually.`) + queueNote;
     showToast(parsed.matched ? 'Screenshot scanned — review before saving' : 'Screenshot scanned, but little was recognized');
   }catch(err){
     console.error(err);
-    statusEl.textContent = 'Could not read this image — try a clearer/cropped screenshot or enter details manually.';
+    statusEl.textContent = 'Could not read this image — try a clearer/cropped screenshot or enter details manually.' + queueNote;
     showToast('Scan failed');
   }
 }
@@ -1782,6 +1834,7 @@ function applyParsedBooking(p){
     document.getElementById('b-platform').value = p.platform;
     toggleAgencyField();
   }
+  if(p.propertyId) document.getElementById('b-property').value = p.propertyId;
   if(p.guestName) document.getElementById('b-guest').value = p.guestName;
   if(p.checkIn) document.getElementById('b-checkin').value = p.checkIn;
   if(p.checkOut) document.getElementById('b-checkout').value = p.checkOut;
@@ -1802,6 +1855,7 @@ function parseBookingScreenshot(rawText){
 
   if(/airbnb/.test(lower)) result.platform = 'Airbnb';
   else if(/booking\.com|booking dot com/.test(lower)) result.platform = 'Booking.com';
+  else if(/suggested door code|arrives in \d+ days?|group of \d+/i.test(text)) result.platform = 'Airbnb';
 
   const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
   const MONTH_RE = 'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec';
@@ -1857,47 +1911,92 @@ function parseBookingScreenshot(rawText){
 
   let checkIn = findLabeledDate(checkinLabelRe);
   let checkOut = findLabeledDate(checkoutLabelRe);
-  if(!checkIn || !checkOut){
+  if(!checkIn || !checkOut || checkOut <= checkIn){
     const all = [];
-    const re = buildDateRe();
-    let m;
-    while((m = re.exec(text))){
-      const iso = matchToISO(m);
-      if(iso) all.push(iso);
+    for(const line of lines){
+      const re = buildDateRe();
+      let m;
+      while((m = re.exec(line))){
+        const iso = matchToISO(m);
+        if(iso) all.push(iso);
+      }
     }
     const uniqueSorted = [...new Set(all)].sort();
     if(uniqueSorted.length>=2){
-      if(!checkIn) checkIn = uniqueSorted[0];
-      if(!checkOut) checkOut = uniqueSorted[uniqueSorted.length-1];
+      checkIn = uniqueSorted[0];
+      checkOut = uniqueSorted[uniqueSorted.length-1];
+    } else {
+      checkIn = null; checkOut = null;
     }
   }
-  if(checkIn && checkOut && checkOut <= checkIn){ checkIn=null; checkOut=null; }
   result.checkIn = checkIn;
   result.checkOut = checkOut;
 
-  const guestsMatch = text.match(/(\d+)\s*(guests?|adults?)/i);
-  if(guestsMatch) result.guests = parseInt(guestsMatch[1],10);
+  const groupMatch = text.match(/([A-Z][a-zA-Z]+)['’]s\s+(?:group of\s+(\d+)|trip)/i);
+  if(groupMatch){
+    result.guestName = groupMatch[1];
+    if(groupMatch[2]) result.guests = parseInt(groupMatch[2],10);
+  }
 
-  const nameLabelMatch = text.match(/(?:guest name|booked by|booker name|guest)\s*[:\-]?\s*([A-Z][a-zA-Z'’.-]+(?:\s+[A-Z][a-zA-Z'’.-]+){0,3})/);
-  if(nameLabelMatch && nameLabelMatch[1]){
-    result.guestName = nameLabelMatch[1].trim();
-  } else {
-    const stop = /^(airbnb|booking\.com|reservation|confirmed|confirmation|check|guest|guests|itinerary|receipt|total|nights?|property|trip|host|arriving|departing|payout|payment|pin|code)/i;
-    for(const line of lines.slice(0,10)){
-      const t = line.trim();
-      if(!t || stop.test(t)) continue;
-      if(/^[A-Z][a-zA-Z'’.-]+(\s+[A-Z][a-zA-Z'’.-]+){1,3}$/.test(t) && !/\d/.test(t)){
-        result.guestName = t;
-        break;
+  if(!result.guestName){
+    const nameLabels = ['guest name','booked by','booker name','guest'];
+    const nameCaptureRe = /^[A-Z][a-zA-Z'’.-]+(?:[ \t]+[A-Z][a-zA-Z'’.-]+){0,3}/;
+    let nameLabelMatch = null;
+    for(const line of lines){
+      const lowerLine = line.toLowerCase();
+      for(const label of nameLabels){
+        const idx = lowerLine.indexOf(label);
+        if(idx === -1) continue;
+        const rest = line.slice(idx+label.length).replace(/^[ \t]*[:\-]?[ \t]*/, '');
+        const m = rest.match(nameCaptureRe);
+        if(m){ nameLabelMatch = m[0]; break; }
+      }
+      if(nameLabelMatch) break;
+    }
+    if(nameLabelMatch){
+      result.guestName = nameLabelMatch.trim();
+    } else {
+      const stop = /^(airbnb|booking\.com|reservation|confirmed|confirmation|check|guest|guests|itinerary|receipt|total|nights?|property|trip|host|arriving|departing|payout|payment|pin|code)/i;
+      for(const line of lines.slice(0,10)){
+        const t = line.trim();
+        if(!t || stop.test(t)) continue;
+        if(/^[A-Z][a-zA-Z'’.-]+(\s+[A-Z][a-zA-Z'’.-]+){1,3}$/.test(t) && !/\d/.test(t)){
+          result.guestName = t;
+          break;
+        }
       }
     }
   }
 
+  if(!result.guests){
+    const guestsMatch = text.match(/(\d+)\s*(guests?|adults?)/i);
+    if(guestsMatch) result.guests = parseInt(guestsMatch[1],10);
+  }
+
+  const amountLabelRe = /(total|amount due|guest (?:paid|total)|you'?ll (?:earn|receive|get paid)|payout|grand total)/i;
+  const amountRe = /(?:[₹$€£]|Rs\.?|INR|USD|EUR|GBP)\s?[\d,]+(?:\.\d{1,2})?|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?/i;
+  function findLabeledAmount(labelRe){
+    for(let i=0;i<lines.length;i++){
+      if(labelRe.test(lines[i])){
+        for(let j=i;j<Math.min(i+3,lines.length);j++){
+          const m = lines[j].match(amountRe);
+          if(m) return m[0].trim();
+        }
+      }
+    }
+    return null;
+  }
+  const totalAmount = findLabeledAmount(amountLabelRe);
+
   const airbnbCode = text.match(/confirmation code[:\s]*([A-Z0-9]{6,12})/i);
   const bookingNum = text.match(/(?:booking|reservation|confirmation)\s*number[:\s]*([0-9]{6,12})/i);
   const pin = text.match(/pin(?:\s*code)?[:\s]*([0-9]{3,6})/i);
-  if(airbnbCode) result.noteLine = `Airbnb confirmation code: ${airbnbCode[1].toUpperCase()}`;
-  else if(bookingNum) result.noteLine = `Booking.com reservation number: ${bookingNum[1]}${pin ? ' · PIN '+pin[1] : ''}`;
+
+  const noteLines = [];
+  if(totalAmount) noteLines.push(`Total payment: ${totalAmount}`);
+  if(airbnbCode) noteLines.push(`Airbnb confirmation code: ${airbnbCode[1].toUpperCase()}`);
+  else if(bookingNum) noteLines.push(`Booking.com reservation number: ${bookingNum[1]}${pin ? ' · PIN '+pin[1] : ''}`);
+  if(noteLines.length) result.noteLine = noteLines.join('\n');
 
   const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
   const phoneMatch = text.match(/(\+\d[\d\s-]{7,14}\d)|(\b\d{3,5}[\s-]\d{3,5}[\s-]?\d{0,5}\b)/);
@@ -1905,7 +2004,31 @@ function parseBookingScreenshot(rawText){
   if(emailMatch) result.contact = emailMatch[0];
   else if(phoneMatch && !usedNumbers.some(n=>phoneMatch[0].replace(/[\s-]/g,'').includes(n))) result.contact = phoneMatch[0].trim();
 
-  result.matched = !!(result.guestName || result.checkIn || result.checkOut || result.platform);
+  let matchedProperty = null;
+  let matchedLen = 0;
+  for(const prop of properties){
+    const candidates = [prop.name, ...(prop.listingAliases||[])];
+    for(const candidate of candidates){
+      const name = (candidate||'').trim();
+      if(name.length < 3) continue;
+      if(lower.includes(name.toLowerCase()) && name.length > matchedLen){
+        matchedProperty = prop;
+        matchedLen = name.length;
+      }
+    }
+  }
+  if(!matchedProperty){
+    for(const prop of properties){
+      const slugMatch = (prop.notes||'').match(/airbnb\.[a-z.]+\/h\/([a-z0-9-]+)/i);
+      if(slugMatch && lower.replace(/[\s-]/g,'').includes(slugMatch[1].toLowerCase().replace(/-/g,''))){
+        matchedProperty = prop;
+        break;
+      }
+    }
+  }
+  if(matchedProperty) result.propertyId = matchedProperty.id;
+
+  result.matched = !!(result.guestName || result.checkIn || result.checkOut || result.platform || result.propertyId);
   return result;
 }
 
@@ -1988,7 +2111,13 @@ async function importEvents(events, propertyId, platform){
   return events.length;
 }
 
-function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+function closeModal(id){
+  document.getElementById(id).classList.remove('open');
+  if(id==='booking-overlay' && screenshotQueue.length>0){
+    screenshotQueue = [];
+    showToast('Remaining queued screenshots discarded');
+  }
+}
 
 let toastTimer;
 function showToast(msg){
