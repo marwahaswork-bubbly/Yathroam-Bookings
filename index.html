@@ -635,9 +635,15 @@ function updateSheetStatus(connected){
   if(el) el.textContent = connected ? 'Connected — bookings and properties sync both ways' : 'Not connected';
 }
 
+function extractSpreadsheetId(value){
+  const urlMatch = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  return urlMatch ? urlMatch[1] : value;
+}
+
 async function saveSheetConfig(){
   sheetSync.clientId = document.getElementById('sheet-client-id').value.trim();
-  sheetSync.spreadsheetId = document.getElementById('sheet-spreadsheet-id').value.trim();
+  sheetSync.spreadsheetId = extractSpreadsheetId(document.getElementById('sheet-spreadsheet-id').value.trim());
+  document.getElementById('sheet-spreadsheet-id').value = sheetSync.spreadsheetId;
   sheetSync.sheetName = document.getElementById('sheet-tab-name').value.trim() || 'Guests';
   await storageSet('sheetSync', sheetSync);
   sheetTokenClient = null;
