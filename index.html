@@ -558,7 +558,12 @@ let properties = [];
 let bookings = [];
 let currentView = 'dashboard';
 
-let sheetSync = { clientId:'', spreadsheetId:'', sheetName:'Guests' };
+const DEFAULT_SHEET_SYNC = {
+  clientId: '517052187694-fuudj54ki1ttm51lt5p0a1d74lsvk182.apps.googleusercontent.com',
+  spreadsheetId: '1di2FD8iCjqQVh1IEqAjqQbukigsWSemnS6akaVr2FnA',
+  sheetName: 'Guests',
+};
+let sheetSync = { ...DEFAULT_SHEET_SYNC };
 let sheetAccessToken = null;
 let sheetTokenClient = null;
 let sheetGidCache = {};
@@ -623,7 +628,7 @@ async function init(){
     await storageSet('properties', properties);
   }
   bookings = (await storageGet('bookings')) || [];
-  sheetSync = (await storageGet('sheetSync')) || { clientId:'', spreadsheetId:'', sheetName:'Guests' };
+  sheetSync = (await storageGet('sheetSync')) || { ...DEFAULT_SHEET_SYNC };
   populatePropertySelects();
   renderAll();
   window.addEventListener('load', attemptSilentSheetReconnect);
