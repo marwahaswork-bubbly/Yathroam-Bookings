@@ -451,7 +451,7 @@
         <input type="number" id="b-guests" min="1" value="2">
       </div>
       <div class="form-row">
-        <label>Guest name</label>
+        <label>Guest name <span id="b-guest-optional-hint" style="display:none;font-weight:400;color:var(--ink-soft);">(optional for "By property")</span></label>
         <input type="text" id="b-guest" placeholder="Jane Cooper" required>
       </div>
       <div class="form-grid">
@@ -1414,8 +1414,10 @@ function openBookingModalForDate(propertyId, dateISO){
 
 
 function toggleAgencyField(){
-  const isAgent = document.getElementById('b-platform').value === 'Agent';
-  document.getElementById('b-agency-row').style.display = isAgent ? '' : 'none';
+  const platform = document.getElementById('b-platform').value;
+  document.getElementById('b-agency-row').style.display = (platform === 'Agent') ? '' : 'none';
+  document.getElementById('b-guest').required = (platform !== 'By property');
+  document.getElementById('b-guest-optional-hint').style.display = (platform === 'By property') ? '' : 'none';
 }
 
 function populatePropertySelects(){
@@ -1543,12 +1545,13 @@ async function saveBooking(e){
     showToast('Check-out must be after check-in');
     return;
   }
+  const platform = document.getElementById('b-platform').value;
   const data = {
     id: id || uid(),
     propertyId: document.getElementById('b-property').value,
-    platform: document.getElementById('b-platform').value,
+    platform,
     guests: parseInt(document.getElementById('b-guests').value)||1,
-    guestName: document.getElementById('b-guest').value.trim(),
+    guestName: document.getElementById('b-guest').value.trim() || (platform === 'By property' ? 'Booked by property' : ''),
     checkIn, checkOut,
     contact: document.getElementById('b-contact').value.trim(),
     agency: document.getElementById('b-platform').value === 'Agent' ? document.getElementById('b-agency').value.trim() : '',
