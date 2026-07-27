@@ -385,6 +385,7 @@
         <div>
           <div class="name">Guest data backup — Google Sheets</div>
           <div class="addr" id="sheet-status">Not connected</div>
+          <div id="sheet-error-detail" style="display:none;font-size:12px;color:var(--clay);margin-top:4px;"></div>
         </div>
         <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;">
           <div class="form-row">
@@ -990,6 +991,33 @@ function mergePulledProperties(remoteRows){
 }
 
 /* ---- two-way sync entrypoint ---- */
+function describeSheetError(err){
+  const msg = (err && err.message) || String(err);
+  let hint = '';
+  if(/failed to fetch|networkerror|load failed/i.test(msg)){
+    hint = ' This usually means the request never reached Google — check your internet connection, or an ad-blocker/privacy setting/mobile data-saver mode may be blocking it. If you opened this page from a link inside another app (WhatsApp, Instagram, etc.), open it in your regular browser (Chrome/Safari) instead — Google blocks sign-in inside those in-app browsers.';
+  } else if(/403/.test(msg)){
+    hint = ' This usually means this Google account doesn\'t have edit access to the sheet — check it\'s shared with the account you signed in with.';
+  } else if(/404/.test(msg)){
+    hint = ' This usually means the Spreadsheet ID is wrong, or the sheet was deleted/moved.';
+  } else if(/expired|not signed in/i.test(msg)){
+    hint = ' Try clicking "Connect Google account" again.';
+  }
+  return msg + hint;
+}
+
+function showSheetError(err){
+  const el = document.getElementById('sheet-error-detail');
+  if(!el) return;
+  el.textContent = 'Last sync error: ' + describeSheetError(err);
+  el.style.display = '';
+}
+
+function clearSheetError(){
+  const el = document.getElementById('sheet-error-detail');
+  if(el){ el.style.display = 'none'; el.textContent = ''; }
+}
+
 async function twoWaySync(){
   if(!sheetAccessToken){ showToast('Connect your Google account first'); return; }
   if(!sheetSync.spreadsheetId){ showToast('Enter a Spreadsheet ID, then Save settings first'); return; }
@@ -1018,9 +1046,11 @@ async function twoWaySync(){
     showToast(total>0
       ? `Synced — ${bookingResult.added} new & ${bookingResult.updated} updated booking(s), ${propResult.added} new & ${propResult.updated} updated propert${(propResult.added+propResult.updated)===1?'y':'ies'}${removedNote}`
       : 'Already up to date with the sheet');
+    clearSheetError();
   }catch(err){
     console.error('two-way sync failed', err);
-    showToast('Sync with Google Sheet failed — see console for details');
+    showSheetError(err);
+    showToast('Sync with Google Sheet failed — see the error message below the connection status');
   }
 }
 
