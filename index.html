@@ -680,6 +680,7 @@ async function saveSheetConfig(){
   await storageSet('sheetSync', sheetSync);
   sheetTokenClient = null;
   sheetGidCache = {};
+  ensuredHeaderTabs.clear();
   showToast('Google Sheet settings saved');
 }
 
@@ -728,13 +729,17 @@ function attemptSilentSheetReconnect(){
   sheetTokenClient.requestAccessToken({ prompt: '' });
 }
 
-async function sheetsFetch(suffix, options={}){
+async function sheetsFetch(suffix, options={}, retriesLeft=3){
   if(!sheetAccessToken) throw new Error('not signed in');
   const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetSync.spreadsheetId}${suffix}`, {
     ...options,
     headers: { ...(options.headers||{}), 'Authorization': `Bearer ${sheetAccessToken}`, 'Content-Type': 'application/json' }
   });
   if(res.status===401){ sheetAccessToken=null; updateSheetStatus(false); throw new Error('Google sign-in expired'); }
+  if(res.status===429 && retriesLeft>0){
+    await new Promise(r=>setTimeout(r, (4-retriesLeft)*1000));
+    return sheetsFetch(suffix, options, retriesLeft-1);
+  }
   if(!res.ok) throw new Error('Sheets API error '+res.status);
   return res.json();
 }
@@ -752,7 +757,9 @@ async function ensureTabExists(tabName){
   }
 }
 
+const ensuredHeaderTabs = new Set();
 async function ensureSheetHeader(tabName, headerRow){
+  if(ensuredHeaderTabs.has(tabName)) return;
   await ensureTabExists(tabName);
   const range = `${tabName}!A1:${colLetter(headerRow.length)}1`;
   const data = await sheetsFetch(`/values/${encodeURIComponent(range)}`);
@@ -762,6 +769,7 @@ async function ensureSheetHeader(tabName, headerRow){
       body: JSON.stringify({ values: [headerRow] })
     });
   }
+  ensuredHeaderTabs.add(tabName);
 }
 
 async function findRowByFirstColumn(tabName, key){
@@ -770,6 +778,15 @@ async function findRowByFirstColumn(tabName, key){
   const rows = data.values || [];
   for(let i=0;i<rows.length;i++){ if(rows[i][0]===key) return i+1; }
   return null;
+}
+
+async function buildRowIndex(tabName){
+  const range = `${tabName}!A:A`;
+  const data = await sheetsFetch(`/values/${encodeURIComponent(range)}`);
+  const rows = data.values || [];
+  const map = new Map();
+  rows.forEach((r,i)=>{ if(r[0]) map.set(r[0], i+1); });
+  return map;
 }
 
 async function fetchSheetRows(tabName, lastCol){
@@ -827,12 +844,12 @@ function sheetRowToBooking(row){
   };
 }
 
-async function syncBookingToSheet(b){
+async function syncBookingToSheet(b, rowIndex){
   if(!sheetAccessToken || !sheetSync.spreadsheetId) return;
   try{
     await ensureSheetHeader(sheetSync.sheetName, BOOKING_HEADER);
     const row = bookingToSheetRow(b);
-    const existingRow = await findRowByFirstColumn(sheetSync.sheetName, b.id);
+    const existingRow = rowIndex ? rowIndex.get(b.id) : await findRowByFirstColumn(sheetSync.sheetName, b.id);
     if(existingRow){
       const range = `${sheetSync.sheetName}!A${existingRow}:${colLetter(BOOKING_HEADER.length)}${existingRow}`;
       await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, { method:'PUT', body: JSON.stringify({ values:[row] }) });
@@ -919,12 +936,12 @@ function sheetRowToProperty(row){
   };
 }
 
-async function syncPropertyToSheet(p){
+async function syncPropertyToSheet(p, rowIndex){
   if(!sheetAccessToken || !sheetSync.spreadsheetId) return;
   try{
     await ensureSheetHeader(PROPERTIES_TAB, PROPERTY_HEADER);
     const row = propertyToSheetRow(p);
-    const existingRow = await findRowByFirstColumn(PROPERTIES_TAB, p.id);
+    const existingRow = rowIndex ? rowIndex.get(p.id) : await findRowByFirstColumn(PROPERTIES_TAB, p.id);
     if(existingRow){
       const range = `${PROPERTIES_TAB}!A${existingRow}:${colLetter(PROPERTY_HEADER.length)}${existingRow}`;
       await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, { method:'PUT', body: JSON.stringify({ values:[row] }) });
@@ -1037,8 +1054,10 @@ async function twoWaySync(){
     populatePropertySelects();
     renderAll();
 
-    for(const p of properties) await syncPropertyToSheet(p);
-    for(const b of bookings) await syncBookingToSheet(b);
+    const propertyRowIndex = await buildRowIndex(PROPERTIES_TAB);
+    for(const p of properties) await syncPropertyToSheet(p, propertyRowIndex);
+    const bookingRowIndex = await buildRowIndex(sheetSync.sheetName);
+    for(const b of bookings) await syncBookingToSheet(b, bookingRowIndex);
 
     const total = propResult.added + propResult.updated + propResult.removed + bookingResult.added + bookingResult.updated + bookingResult.removed;
     const removedNote = (bookingResult.removed + propResult.removed) > 0
