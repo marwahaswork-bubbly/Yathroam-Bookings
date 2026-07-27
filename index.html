@@ -432,7 +432,7 @@
       </div>
       <div class="form-row">
         <label>Platform</label>
-        <select id="b-platform" onchange="toggleAgencyField()">
+        <select id="b-platform" onchange="onPlatformChange()">
           <option>Airbnb</option>
           <option>Booking.com</option>
           <option>Vrbo</option>
@@ -1418,6 +1418,17 @@ function toggleAgencyField(){
   document.getElementById('b-agency-row').style.display = (platform === 'Agent') ? '' : 'none';
   document.getElementById('b-guest').required = (platform !== 'By property');
   document.getElementById('b-guest-optional-hint').style.display = (platform === 'By property') ? '' : 'none';
+}
+
+function onPlatformChange(){
+  const platform = document.getElementById('b-platform').value;
+  const guestsInput = document.getElementById('b-guests');
+  if(platform === 'By property'){
+    guestsInput.value = '';
+  } else if(guestsInput.value === ''){
+    guestsInput.value = 2;
+  }
+  toggleAgencyField();
 }
 
 function populatePropertySelects(){
