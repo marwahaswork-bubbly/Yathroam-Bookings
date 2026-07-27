@@ -351,7 +351,6 @@
           <option value="Vrbo">Vrbo</option>
           <option value="Direct">Direct</option>
           <option value="Agent">Agent</option>
-          <option value="By property">By property</option>
           <option value="Other">Other</option>
         </select>
         <select id="filter-time" onchange="renderBookingsView()">
@@ -1043,7 +1042,7 @@ function renderAll(){
 }
 
 function renderNavCounts(){
-  document.getElementById('nav-count-bookings').textContent = bookings.length;
+  document.getElementById('nav-count-bookings').textContent = bookings.filter(b=>b.platform!=='By property').length;
   document.getElementById('nav-count-properties').textContent = properties.length;
 }
 
@@ -1069,10 +1068,11 @@ function renderDashboard(){
   document.getElementById('today-heading').textContent = 'Dashboard';
   document.getElementById('today-sub').textContent = today.toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric', year:'numeric'});
 
-  const arrivingTomorrow = bookings.filter(b=>b.checkIn===tomorrowISO);
-  const arrivingToday = bookings.filter(b=>b.checkIn===todayISO);
-  const departingToday = bookings.filter(b=>b.checkOut===todayISO);
-  const hosted = bookings.filter(b=> b.checkIn <= todayISO && b.checkOut > todayISO);
+  const visibleBookings = bookings.filter(b=>b.platform!=='By property');
+  const arrivingTomorrow = visibleBookings.filter(b=>b.checkIn===tomorrowISO);
+  const arrivingToday = visibleBookings.filter(b=>b.checkIn===todayISO);
+  const departingToday = visibleBookings.filter(b=>b.checkOut===todayISO);
+  const hosted = visibleBookings.filter(b=> b.checkIn <= todayISO && b.checkOut > todayISO);
 
   document.getElementById('stat-tomorrow').textContent = arrivingTomorrow.length;
   document.getElementById('stat-today-arr').textContent = arrivingToday.length;
@@ -1103,7 +1103,7 @@ function renderDashboard(){
     }).join('');
   }
 
-  const upcoming = bookings
+  const upcoming = visibleBookings
     .filter(b=> b.checkIn >= todayISO && b.checkIn <= fmtISO(addDays(today,7)))
     .sort((a,b)=> a.checkIn.localeCompare(b.checkIn));
   const wrap = document.getElementById('upcoming-table');
@@ -1237,11 +1237,12 @@ function openStatModal(kind){
   const today = todayDate();
   const todayISO = fmtISO(today);
   const tomorrowISO = fmtISO(addDays(today,1));
+  const visibleBookings = bookings.filter(b=>b.platform!=='By property');
   let list;
-  if(kind==='tomorrow') list = bookings.filter(b=>b.checkIn===tomorrowISO);
-  else if(kind==='today-arr') list = bookings.filter(b=>b.checkIn===todayISO);
-  else if(kind==='today-dep') list = bookings.filter(b=>b.checkOut===todayISO);
-  else if(kind==='hosted') list = bookings.filter(b=> b.checkIn <= todayISO && b.checkOut > todayISO);
+  if(kind==='tomorrow') list = visibleBookings.filter(b=>b.checkIn===tomorrowISO);
+  else if(kind==='today-arr') list = visibleBookings.filter(b=>b.checkIn===todayISO);
+  else if(kind==='today-dep') list = visibleBookings.filter(b=>b.checkOut===todayISO);
+  else if(kind==='hosted') list = visibleBookings.filter(b=> b.checkIn <= todayISO && b.checkOut > todayISO);
   else list = [];
 
   list = list.slice().sort((a,b)=> a.checkIn.localeCompare(b.checkIn) || a.guestName.localeCompare(b.guestName));
@@ -1455,7 +1456,7 @@ function renderBookingsView(){
   const dateTo = document.getElementById('filter-date-to').value;
   const todayISO = fmtISO(todayDate());
 
-  let list = bookings.slice();
+  let list = bookings.filter(b=>b.platform!=='By property');
   if(propFilter) list = list.filter(b=>b.propertyId===propFilter);
   if(platFilter) list = list.filter(b=>b.platform===platFilter);
   if(search) list = list.filter(b=>bookingSearchBlob(b).includes(search));
