@@ -1035,9 +1035,42 @@ function clearSheetError(){
   if(el){ el.style.display = 'none'; el.textContent = ''; }
 }
 
+async function batchPushToSheet(tabName, headerRow, items, toRowFn, rowIndex){
+  if(items.length===0) return;
+  await ensureSheetHeader(tabName, headerRow);
+  const lastCol = colLetter(headerRow.length);
+  const updates = [];
+  const appends = [];
+  for(const item of items){
+    const existingRow = rowIndex.get(item.id);
+    if(existingRow){
+      updates.push({ range: `${tabName}!A${existingRow}:${lastCol}${existingRow}`, values: [toRowFn(item)] });
+    } else {
+      appends.push(toRowFn(item));
+    }
+    item.syncedToSheet = true;
+  }
+  if(updates.length>0){
+    await sheetsFetch('/values:batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ valueInputOption: 'RAW', data: updates })
+    });
+  }
+  if(appends.length>0){
+    const range = `${tabName}!A:${lastCol}`;
+    await sheetsFetch(`/values/${encodeURIComponent(range)}:append?valueInputOption=RAW`, {
+      method: 'POST',
+      body: JSON.stringify({ values: appends })
+    });
+  }
+}
+
+let syncInProgress = false;
 async function twoWaySync(){
+  if(syncInProgress){ showToast('A sync is already running — please wait for it to finish'); return; }
   if(!sheetAccessToken){ showToast('Connect your Google account first'); return; }
   if(!sheetSync.spreadsheetId){ showToast('Enter a Spreadsheet ID, then Save settings first'); return; }
+  syncInProgress = true;
   showToast('Syncing with Google Sheet…');
   try{
     await ensureSheetHeader(sheetSync.sheetName, BOOKING_HEADER);
@@ -1049,15 +1082,15 @@ async function twoWaySync(){
     const bookingRows = await fetchSheetRows(sheetSync.sheetName, colLetter(BOOKING_HEADER.length));
     const bookingResult = mergePulledBookings(bookingRows);
 
+    const propertyRowIndex = await buildRowIndex(PROPERTIES_TAB);
+    await batchPushToSheet(PROPERTIES_TAB, PROPERTY_HEADER, properties, propertyToSheetRow, propertyRowIndex);
+    const bookingRowIndex = await buildRowIndex(sheetSync.sheetName);
+    await batchPushToSheet(sheetSync.sheetName, BOOKING_HEADER, bookings, bookingToSheetRow, bookingRowIndex);
+
     await storageSet('properties', properties);
     await storageSet('bookings', bookings);
     populatePropertySelects();
     renderAll();
-
-    const propertyRowIndex = await buildRowIndex(PROPERTIES_TAB);
-    for(const p of properties) await syncPropertyToSheet(p, propertyRowIndex);
-    const bookingRowIndex = await buildRowIndex(sheetSync.sheetName);
-    for(const b of bookings) await syncBookingToSheet(b, bookingRowIndex);
 
     const total = propResult.added + propResult.updated + propResult.removed + bookingResult.added + bookingResult.updated + bookingResult.removed;
     const removedNote = (bookingResult.removed + propResult.removed) > 0
@@ -1070,6 +1103,8 @@ async function twoWaySync(){
     console.error('two-way sync failed', err);
     showSheetError(err);
     showToast('Sync with Google Sheet failed — see the error message below the connection status');
+  } finally {
+    syncInProgress = false;
   }
 }
 
