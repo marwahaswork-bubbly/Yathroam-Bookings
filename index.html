@@ -140,6 +140,7 @@
   .tag-vrbo{background:#E7EAF3;color:#3A4A8F;}
   .tag-direct{background:var(--clay-bg);color:var(--clay);}
   .tag-agent{background:#EAE3F3;color:#5B3E96;}
+  .tag-property{background:#E3EDE6;color:#2E6B47;}
   .tag-other{background:#EFEDE6;color:#5B6472;}
   .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;}
   .filters{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
@@ -321,6 +322,7 @@
         <div class="cal-legend-item"><span class="cal-legend-dot" style="background:#3A4A8F;"></span>Vrbo</div>
         <div class="cal-legend-item"><span class="cal-legend-dot" style="background:#8A4325;"></span>Direct</div>
         <div class="cal-legend-item"><span class="cal-legend-dot" style="background:#5B3E96;"></span>Agent</div>
+        <div class="cal-legend-item"><span class="cal-legend-dot" style="background:#2E6B47;"></span>By property</div>
         <div class="cal-legend-item"><span class="cal-legend-dot" style="background:#6B5D4F;"></span>Other</div>
       </div>
     </div>
@@ -349,6 +351,7 @@
           <option value="Vrbo">Vrbo</option>
           <option value="Direct">Direct</option>
           <option value="Agent">Agent</option>
+          <option value="By property">By property</option>
           <option value="Other">Other</option>
         </select>
         <select id="filter-time" onchange="renderBookingsView()">
@@ -436,6 +439,7 @@
           <option>Vrbo</option>
           <option>Direct</option>
           <option>Agent</option>
+          <option>By property</option>
           <option>Other</option>
         </select>
       </div>
@@ -629,7 +633,7 @@ function propertyName(id){
   return p ? p.name : 'Unassigned property';
 }
 function platformTagClass(p){
-  return {'Airbnb':'tag-airbnb','Booking.com':'tag-booking','Vrbo':'tag-vrbo','Direct':'tag-direct','Agent':'tag-agent'}[p] || 'tag-other';
+  return {'Airbnb':'tag-airbnb','Booking.com':'tag-booking','Vrbo':'tag-vrbo','Direct':'tag-direct','Agent':'tag-agent','By property':'tag-property'}[p] || 'tag-other';
 }
 
 const DEFAULT_PROPERTIES = [
@@ -1289,6 +1293,7 @@ const PLATFORM_COLORS = {
   'Vrbo': '#3A4A8F',
   'Direct': '#8A4325',
   'Agent': '#5B3E96',
+  'By property': '#2E6B47',
   'Other': '#6B5D4F'
 };
 
