@@ -268,6 +268,7 @@
         </div>
         <div style="display:flex;gap:8px;">
           <button class="btn" onclick="quickScanNewBooking()">📷 Scan screenshot</button>
+          <button class="btn" onclick="quickPastePhoto()">📋 Paste photo</button>
           <button class="btn" onclick="quickPasteNewBooking()">📝 Paste message</button>
           <button class="btn btn-primary" onclick="openBookingModal()">+ New booking</button>
         </div>
@@ -334,6 +335,7 @@
         <div style="display:flex;gap:8px;">
           <button class="btn" onclick="refreshBookings()">↻ Refresh</button>
           <button class="btn" onclick="quickScanNewBooking()">📷 Scan screenshot</button>
+          <button class="btn" onclick="quickPastePhoto()">📋 Paste photo</button>
           <button class="btn" onclick="quickPasteNewBooking()">📝 Paste message</button>
           <button class="btn btn-primary" onclick="openBookingModal()">+ New booking</button>
         </div>
@@ -417,6 +419,7 @@
       <input type="hidden" id="b-id">
       <div class="form-row" style="border:1px dashed var(--line);border-radius:8px;padding:12px;text-align:center;">
         <button type="button" class="btn btn-sm" onclick="triggerScreenshotUpload()">📷 Scan Airbnb / Booking.com screenshot(s)</button>
+        <button type="button" class="btn btn-sm" onclick="pastePhotoFromClipboard()">📋 Paste photo</button>
         <button type="button" class="btn btn-sm" onclick="triggerPasteMessage()">📝 Paste confirmation/enquiry message</button>
         <button type="button" class="btn btn-sm" id="scan-skip-btn" onclick="skipToNextScreenshot()" style="display:none;">Skip to next screenshot →</button>
         <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot, or a pasted confirmation/enquiry message, and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they'll be scanned one at a time, one booking per screenshot.</div>
@@ -1817,7 +1820,7 @@ function handleIcsFileUpload(e){
 }
 
 /* ---------------- Booking screenshot OCR import ---------------- */
-const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot, or a pasted confirmation/enquiry message, and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they\'ll be scanned one at a time, one booking per screenshot.';
+const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot, or a pasted confirmation/enquiry message, and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once (scanned one at a time), or just copy a screenshot and press Ctrl+V (Cmd+V on Mac) anywhere on this page.';
 
 let screenshotQueue = [];
 
@@ -1936,6 +1939,60 @@ function parsePastedMessage(){
   }
   showToast(parsed.matched ? 'Message parsed — review before saving' : 'Parsed, but little was recognized');
 }
+
+function quickPastePhoto(){
+  if(properties.length===0){
+    showToast('Add a property first');
+    setView('properties');
+    return;
+  }
+  openBookingModal();
+  pastePhotoFromClipboard();
+}
+
+async function pastePhotoFromClipboard(){
+  if(!navigator.clipboard || !navigator.clipboard.read){
+    showToast('Clipboard access not supported here — copy a screenshot, then press Ctrl+V (Cmd+V) instead');
+    return;
+  }
+  try{
+    const items = await navigator.clipboard.read();
+    for(const item of items){
+      const imageType = item.types.find(t=>t.startsWith('image/'));
+      if(imageType){
+        const blob = await item.getType(imageType);
+        await processScreenshotFile(blob);
+        return;
+      }
+    }
+    showToast('No image found on your clipboard — copy a screenshot first');
+  }catch(err){
+    console.error(err);
+    showToast('Could not read clipboard — copy a screenshot, then press Ctrl+V (Cmd+V) instead');
+  }
+}
+
+document.addEventListener('paste', (e)=>{
+  const items = (e.clipboardData || window.clipboardData)?.items;
+  if(!items) return;
+  for(const item of items){
+    if(item.type && item.type.startsWith('image/')){
+      const file = item.getAsFile();
+      if(!file) continue;
+      e.preventDefault();
+      if(properties.length===0){
+        showToast('Add a property first');
+        setView('properties');
+        return;
+      }
+      if(!document.getElementById('booking-overlay').classList.contains('open')){
+        openBookingModal();
+      }
+      processScreenshotFile(file);
+      return;
+    }
+  }
+});
 
 function parseBookingScreenshot(rawText){
   const text = (rawText || '').replace(/\r/g,'');
