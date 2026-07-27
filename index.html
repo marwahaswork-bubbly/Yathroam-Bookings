@@ -268,6 +268,7 @@
         </div>
         <div style="display:flex;gap:8px;">
           <button class="btn" onclick="quickScanNewBooking()">📷 Scan screenshot</button>
+          <button class="btn" onclick="quickPasteNewBooking()">📝 Paste message</button>
           <button class="btn btn-primary" onclick="openBookingModal()">+ New booking</button>
         </div>
       </div>
@@ -333,6 +334,7 @@
         <div style="display:flex;gap:8px;">
           <button class="btn" onclick="refreshBookings()">↻ Refresh</button>
           <button class="btn" onclick="quickScanNewBooking()">📷 Scan screenshot</button>
+          <button class="btn" onclick="quickPasteNewBooking()">📝 Paste message</button>
           <button class="btn btn-primary" onclick="openBookingModal()">+ New booking</button>
         </div>
       </div>
@@ -415,8 +417,9 @@
       <input type="hidden" id="b-id">
       <div class="form-row" style="border:1px dashed var(--line);border-radius:8px;padding:12px;text-align:center;">
         <button type="button" class="btn btn-sm" onclick="triggerScreenshotUpload()">📷 Scan Airbnb / Booking.com screenshot(s)</button>
+        <button type="button" class="btn btn-sm" onclick="triggerPasteMessage()">📝 Paste confirmation/enquiry message</button>
         <button type="button" class="btn btn-sm" id="scan-skip-btn" onclick="skipToNextScreenshot()" style="display:none;">Skip to next screenshot →</button>
-        <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they'll be scanned one at a time, one booking per screenshot.</div>
+        <div id="scan-status" style="font-size:11px;color:var(--ink-soft);margin-top:6px;">Reads a booking confirmation screenshot, or a pasted confirmation/enquiry message, and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they'll be scanned one at a time, one booking per screenshot.</div>
       </div>
       <div class="form-row">
         <label>Property</label>
@@ -546,6 +549,21 @@
     <div class="modal-actions" style="justify-content:flex-end;gap:10px;">
       <button type="button" class="btn" onclick="cancelDoubleBooking()">Go back and edit</button>
       <button type="button" class="btn btn-brass" onclick="confirmDoubleBooking()">Save anyway</button>
+    </div>
+  </div>
+</div>
+
+<!-- Paste confirmation/enquiry message -->
+<div class="overlay" id="paste-message-overlay">
+  <div class="modal">
+    <h2>Paste confirmation/enquiry message</h2>
+    <p class="sub" style="margin:-12px 0 16px;font-size:13px;">Paste a WhatsApp confirmation, email, or enquiry form text — guest name and dates get pulled out automatically, and the full message is kept in Notes.</p>
+    <div class="form-row">
+      <textarea id="paste-message-text" rows="9" placeholder="Paste the message text here…"></textarea>
+    </div>
+    <div class="modal-actions" style="justify-content:flex-end;gap:10px;">
+      <button type="button" class="btn" onclick="closeModal('paste-message-overlay')">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="parsePastedMessage()">Parse & fill booking</button>
     </div>
   </div>
 </div>
@@ -1799,7 +1817,7 @@ function handleIcsFileUpload(e){
 }
 
 /* ---------------- Booking screenshot OCR import ---------------- */
-const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they\'ll be scanned one at a time, one booking per screenshot.';
+const SCAN_DEFAULT_MSG = 'Reads a booking confirmation screenshot, or a pasted confirmation/enquiry message, and fills the fields below — processed locally in your browser, then review before saving. You can select multiple screenshots at once; they\'ll be scanned one at a time, one booking per screenshot.';
 
 let screenshotQueue = [];
 
@@ -1868,7 +1886,7 @@ async function processScreenshotFile(file){
   }
 }
 
-function applyParsedBooking(p){
+function applyParsedBooking(p, rawText){
   if(p.platform){
     document.getElementById('b-platform').value = p.platform;
     toggleAgencyField();
@@ -1879,10 +1897,44 @@ function applyParsedBooking(p){
   if(p.checkOut) document.getElementById('b-checkout').value = p.checkOut;
   if(p.guests) document.getElementById('b-guests').value = p.guests;
   if(p.contact) document.getElementById('b-contact').value = p.contact;
-  if(p.noteLine){
+  const noteParts = [];
+  if(p.noteLine) noteParts.push(p.noteLine);
+  if(rawText) noteParts.push(rawText.trim());
+  if(noteParts.length){
     const notesEl = document.getElementById('b-notes');
-    notesEl.value = notesEl.value ? notesEl.value + '\n' + p.noteLine : p.noteLine;
+    const addition = noteParts.join('\n');
+    notesEl.value = notesEl.value ? notesEl.value + '\n' + addition : addition;
   }
+}
+
+function triggerPasteMessage(){
+  document.getElementById('paste-message-text').value = '';
+  document.getElementById('paste-message-overlay').classList.add('open');
+}
+
+function quickPasteNewBooking(){
+  if(properties.length===0){
+    showToast('Add a property first');
+    setView('properties');
+    return;
+  }
+  openBookingModal();
+  triggerPasteMessage();
+}
+
+function parsePastedMessage(){
+  const text = document.getElementById('paste-message-text').value.trim();
+  if(!text){ showToast('Paste some text first'); return; }
+  const parsed = parseBookingScreenshot(text);
+  applyParsedBooking(parsed, text);
+  closeModal('paste-message-overlay');
+  const statusEl = document.getElementById('scan-status');
+  if(statusEl){
+    statusEl.textContent = parsed.matched
+      ? `Detected ${parsed.platform || 'booking'} details from the pasted message — double-check dates and guest name, then save.`
+      : `Couldn't confidently parse that message — please fill in the details manually. The full message was added to Notes.`;
+  }
+  showToast(parsed.matched ? 'Message parsed — review before saving' : 'Parsed, but little was recognized');
 }
 
 function parseBookingScreenshot(rawText){
